@@ -13,8 +13,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Already using latest major version
       - uses: actions/checkout@v4
 
+      # Already using latest major version
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -31,13 +33,15 @@ jobs:
       - name: Run Integration Tests
         run: ./mvnw verify -DskipUnitTests
 
-      - name: SonarQube Analysis
+      - name: SonarCloud Analysis # Corrected name (was SonarQube)
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          # IMPORTANT: Ensure sonar.organization=nguyenvuhoabinh is set correctly in your pom.xml
         run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=NguyenVuHoaBinh_prototype9
 
       - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v3
+        # Updated v3 -> v4
+        uses: actions/upload-artifact@v4
         with:
           name: service-jars
           path: |
@@ -51,10 +55,12 @@ jobs:
     needs: build
 
     steps:
-      - uses: actions/checkout@v3
+      # Updated v3 -> v4
+      - uses: actions/checkout@v4
 
+      # Updated v3 -> v4
       - name: Set up JDK 17
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -64,174 +70,8 @@ jobs:
         run: ./mvnw org.owasp:dependency-check-maven:check
 
       - name: Upload OWASP Report
-        uses: actions/upload-artifact@v3
+        # Updated v3 -> v4
+        uses: actions/upload-artifact@v4
         with:
           name: dependency-check-report
           path: target/dependency-check-report.html
-
-  container-build:
-    name: Build and Push Containers
-    runs-on: ubuntu-latest
-    needs: [build, security-scan]
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/release/')
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v3
-        with:
-          name: service-jars
-          path: services
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Login to Container Registry
-        uses: docker/login-action@v2
-        with:
-          registry: ${{ secrets.DOCKER_REGISTRY }}
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Extract branch name
-        shell: bash
-        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
-        id: extract_branch
-
-      - name: Set Docker tags
-        id: docker_tags
-        run: |
-          if [[ "${{ steps.extract_branch.outputs.branch }}" == "main" ]]; then
-            echo "tags=latest" >> $GITHUB_OUTPUT
-          elif [[ "${{ steps.extract_branch.outputs.branch }}" == "develop" ]]; then
-            echo "tags=dev" >> $GITHUB_OUTPUT
-          elif [[ "${{ steps.extract_branch.outputs.branch }}" == release/* ]]; then
-            VERSION=${GITHUB_REF#refs/heads/release/}
-            echo "tags=$VERSION" >> $GITHUB_OUTPUT
-          else
-            echo "tags=test" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Build and Push API Gateway
-        uses: docker/build-push-action@v3
-        with:
-          context: services/api-gateway
-          push: true
-          tags: ${{ secrets.DOCKER_REGISTRY }}/llm-workflow/api-gateway:${{ steps.docker_tags.outputs.tags }}
-
-      - name: Build and Push Config Service
-        uses: docker/build-push-action@v3
-        with:
-          context: services/config-service
-          push: true
-          tags: ${{ secrets.DOCKER_REGISTRY }}/llm-workflow/config-service:${{ steps.docker_tags.outputs.tags }}
-
-      - name: Build and Push Tool Registry
-        uses: docker/build-push-action@v3
-        with:
-          context: services/tool-registry
-          push: true
-          tags: ${{ secrets.DOCKER_REGISTRY }}/llm-workflow/tool-registry:${{ steps.docker_tags.outputs.tags }}
-
-      - name: Build and Push Flow Registry
-        uses: docker/build-push-action@v3
-        with:
-          context: services/flow-registry
-          push: true
-          tags: ${{ secrets.DOCKER_REGISTRY }}/llm-workflow/flow-registry:${{ steps.docker_tags.outputs.tags }}
-
-      - name: Build and Push Execution Engine
-        uses: docker/build-push-action@v3
-        with:
-          context: services/execution-engine
-          push: true
-          tags: ${{ secrets.DOCKER_REGISTRY }}/llm-workflow/execution-engine:${{ steps.docker_tags.outputs.tags }}
-
-      - name: Build and Push LLM Processor
-        uses: docker/build-push-action@v3
-        with:
-          context: services/llm-processor
-          push: true
-          tags: ${{ secrets.DOCKER_REGISTRY }}/llm-workflow/llm-processor:${{ steps.docker_tags.outputs.tags }}
-
-  deploy:
-    name: Deploy to Environment
-    runs-on: ubuntu-latest
-    needs: container-build
-    if: |
-      (github.event_name == 'workflow_dispatch') || 
-      (github.ref == 'refs/heads/develop' && github.event_name == 'push') ||
-      (startsWith(github.ref, 'refs/heads/release/') && github.event_name == 'push') ||
-      (github.ref == 'refs/heads/main' && github.event_name == 'push')
-
-    environment:
-      name: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod') || (github.ref == 'refs/heads/develop' && 'dev') || (startsWith(github.ref, 'refs/heads/release/') && 'test') || 'dev' }}
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
-
-      - name: Set Kubernetes Context
-        uses: azure/k8s-set-context@v3
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBE_CONFIG }}
-
-      - name: Extract environment
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "env=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "env=prod" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
-            echo "env=dev" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == refs/heads/release/* ]]; then
-            echo "env=test" >> $GITHUB_OUTPUT
-          else
-            echo "env=dev" >> $GITHUB_OUTPUT
-          fi
-        id: extract_env
-
-      - name: Deploy to Kubernetes
-        run: |
-          cd infrastructure/kubernetes/${{ steps.extract_env.outputs.env }}
-          
-          # Update image tags in deployment files
-          sed -i "s|image: .*api-gateway.*|image: ${{ secrets.DOCKER_REGISTRY }}/llm-workflow/api-gateway:${{ steps.docker_tags.outputs.tags }}|g" api-gateway/deployment.yaml
-          sed -i "s|image: .*config-service.*|image: ${{ secrets.DOCKER_REGISTRY }}/llm-workflow/config-service:${{ steps.docker_tags.outputs.tags }}|g" config-service/deployment.yaml
-          sed -i "s|image: .*tool-registry.*|image: ${{ secrets.DOCKER_REGISTRY }}/llm-workflow/tool-registry:${{ steps.docker_tags.outputs.tags }}|g" tool-registry/deployment.yaml
-          sed -i "s|image: .*flow-registry.*|image: ${{ secrets.DOCKER_REGISTRY }}/llm-workflow/flow-registry:${{ steps.docker_tags.outputs.tags }}|g" flow-registry/deployment.yaml
-          sed -i "s|image: .*execution-engine.*|image: ${{ secrets.DOCKER_REGISTRY }}/llm-workflow/execution-engine:${{ steps.docker_tags.outputs.tags }}|g" execution-engine/deployment.yaml
-          sed -i "s|image: .*llm-processor.*|image: ${{ secrets.DOCKER_REGISTRY }}/llm-workflow/llm-processor:${{ steps.docker_tags.outputs.tags }}|g" llm-processor/deployment.yaml
-          
-          # Apply Kubernetes manifests
-          kubectl apply -f config-service/
-          sleep 30  # Wait for config service to start
-          kubectl apply -f api-gateway/
-          kubectl apply -f tool-registry/
-          kubectl apply -f flow-registry/
-          kubectl apply -f execution-engine/
-          kubectl apply -f llm-processor/
-
-      - name: Verify Deployment
-        run: |
-          kubectl get pods -n llm-workflow-${{ steps.extract_env.outputs.env }}
-          
-          # Check if all deployments are ready
-          kubectl wait --for=condition=Available --timeout=300s deployment -l app=llm-workflow -n llm-workflow-${{ steps.extract_env.outputs.env }}
-
-      - name: Notify Deployment Status
-        if: always()
-        uses: rtCamp/action-slack-notify@v2
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_CHANNEL: deployments
-          SLACK_TITLE: Deployment to ${{ steps.extract_env.outputs.env }}
-          SLACK_MESSAGE: Deployment of LLM Workflow System to ${{ steps.extract_env.outputs.env }} ${{ job.status == 'success' && 'succeeded' || 'failed' }}
-          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
